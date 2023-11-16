@@ -3,7 +3,7 @@ import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
 plugins {
     id("java")
     id("eclipse")
-    id("org.jetbrains.gradle.plugin.idea-ext") version "1.0.1"
+    id("org.jetbrains.gradle.plugin.idea-ext") version "1.1.7"
     id("com.github.johnrengelman.shadow") version "7.0.0"
     kotlin("plugin.serialization") version "1.9.0"
     kotlin("jvm") version "1.9.0"
