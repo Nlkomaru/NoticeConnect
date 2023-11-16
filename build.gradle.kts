@@ -7,7 +7,7 @@ plugins {
     id("com.github.johnrengelman.shadow") version "7.0.0"
     kotlin("plugin.serialization") version "1.9.0"
     kotlin("jvm") version "1.9.0"
-    id("com.github.evestera.depsize") version "0.1.0"
+    id("com.github.evestera.depsize") version "0.2.0"
 }
 
 group = "com.noticemc"
