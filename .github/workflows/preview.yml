@@ -1,0 +1,71 @@
+name: PR Preview Build
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: true
+
+      - name: Change wrapper permissions
+        run: chmod +x ./gradlew
+
+      - name: Build with Gradle
+        run: ./gradlew build
+
+      - name: Prepare artifacts
+        run: |
+          mkdir -p ./artifacts
+          cp ./velocity/build/libs/NoticeConnect-Velocity-*.jar ./artifacts/ 2>/dev/null || true
+          cp ./paper/build/libs/NoticeConnect-Paper-*.jar ./artifacts/ 2>/dev/null || true
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: NoticeConnect-PR-${{ github.event.pull_request.number }}
+          path: ./artifacts/
+          retention-days: 7
+
+      - name: Comment PR with artifact info
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const artifactDir = './artifacts';
+            let fileList = '';
+            if (fs.existsSync(artifactDir)) {
+              const files = fs.readdirSync(artifactDir);
+              fileList = files.map(f => `- \`${f}\``).join('\n');
+            }
+
+            const body = `## 📦 Build Preview
+
+            Artifacts for this PR are ready!
+
+            **Files:**
+            ${fileList}
+
+            📥 Download from the [Actions tab](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}).`;
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body
+            });

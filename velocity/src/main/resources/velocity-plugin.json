@@ -1,0 +1,10 @@
+{
+  "id":"noticeconnect",
+  "name":"NoticeConnect",
+  "version":"1.0-SNAPSHOT",
+  "description":"Login ,Left Message",
+  "authors":[],
+  "dependencies":[],
+  "main":"com.noticemc.noticeconnect.velocity.NoticeConnectVelocity",
+  "permissions":["noticeconnect.hide.left","noticeconnect.hide.join"]
+}
