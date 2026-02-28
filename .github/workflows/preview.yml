@@ -5,12 +5,26 @@ on:
     types: [opened, synchronize]
 
 permissions:
-  contents: read
+  contents: write
   pull-requests: write
 
 jobs:
-  build:
+  setup:
     runs-on: ubuntu-latest
+    outputs:
+      commit_sha: ${{ steps.vars.outputs.commit_sha }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set short git commit SHA
+        id: vars
+        run: echo "commit_sha=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+  build:
+    needs: setup
+    runs-on: ubuntu-latest
+    env:
+      COMMIT_SHORT_SHA: ${{ needs.setup.outputs.commit_sha }}
     steps:
       - uses: actions/checkout@v4
 
@@ -32,40 +46,60 @@ jobs:
       - name: Prepare artifacts
         run: |
           mkdir -p ./artifacts
-          cp ./velocity/build/libs/NoticeConnect-Velocity-*.jar ./artifacts/ 2>/dev/null || true
-          cp ./paper/build/libs/NoticeConnect-Paper-*.jar ./artifacts/ 2>/dev/null || true
+          cp ./velocity/build/libs/NoticeConnect-Velocity-*.jar ./artifacts/NoticeConnect-Velocity-${{ env.COMMIT_SHORT_SHA }}.jar 2>/dev/null || true
+          cp ./paper/build/libs/NoticeConnect-Paper-*.jar ./artifacts/NoticeConnect-Paper-${{ env.COMMIT_SHORT_SHA }}.jar 2>/dev/null || true
 
-      - name: Upload build artifacts
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: NoticeConnect-PR-${{ github.event.pull_request.number }}
+          name: jars
           path: ./artifacts/
           retention-days: 7
 
-      - name: Comment PR with artifact info
-        uses: actions/github-script@v7
+  release:
+    needs: [setup, build]
+    runs-on: ubuntu-latest
+    env:
+      COMMIT_SHORT_SHA: ${{ needs.setup.outputs.commit_sha }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download JAR artifacts
+        uses: actions/download-artifact@v4
         with:
-          script: |
-            const fs = require('fs');
-            const artifactDir = './artifacts';
-            let fileList = '';
-            if (fs.existsSync(artifactDir)) {
-              const files = fs.readdirSync(artifactDir);
-              fileList = files.map(f => `- \`${f}\``).join('\n');
-            }
+          name: jars
+          path: ./artifacts
 
-            const body = `## 📦 Build Preview
+      - name: Create preview release
+        run: |
+          TAG_NAME="preview-pr${{ github.event.pull_request.number }}-${{ env.COMMIT_SHORT_SHA }}"
 
-            Artifacts for this PR are ready!
+          gh release create "$TAG_NAME" \
+            --title "Preview: PR #${{ github.event.pull_request.number }} (${{ env.COMMIT_SHORT_SHA }})" \
+            --notes "Preview build for PR #${{ github.event.pull_request.number }}
 
-            **Files:**
-            ${fileList}
+          **Commit:** ${{ github.sha }}
+          **Branch:** ${{ github.head_ref }}
 
-            📥 Download from the [Actions tab](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}).`;
+          > This is a preview build and may be unstable." \
+            --prerelease \
+            ./artifacts/*.jar
 
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: body
-            });
+      - name: Comment PR
+        run: |
+          RELEASE_URL="https://github.com/${{ github.repository }}/releases/tag/preview-pr${{ github.event.pull_request.number }}-${{ env.COMMIT_SHORT_SHA }}"
+          DOWNLOAD_BASE="https://github.com/${{ github.repository }}/releases/download/preview-pr${{ github.event.pull_request.number }}-${{ env.COMMIT_SHORT_SHA }}"
+
+          cat <<EOF > comment.md
+          ## Preview Build
+
+          | Artifact | Download |
+          |----------|----------|
+          | Velocity | [NoticeConnect-Velocity-${{ env.COMMIT_SHORT_SHA }}.jar]($DOWNLOAD_BASE/NoticeConnect-Velocity-${{ env.COMMIT_SHORT_SHA }}.jar) |
+          | Paper | [NoticeConnect-Paper-${{ env.COMMIT_SHORT_SHA }}.jar]($DOWNLOAD_BASE/NoticeConnect-Paper-${{ env.COMMIT_SHORT_SHA }}.jar) |
+
+          [Release Page]($RELEASE_URL)
+          EOF
+
+          gh pr comment ${{ github.event.pull_request.number }} --body-file comment.md
