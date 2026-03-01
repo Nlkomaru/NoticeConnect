@@ -1,0 +1,65 @@
+name: Build and Release
+
+on:
+  push:
+    branches: [master]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Bump version and push tag
+        id: tag_version
+        uses: mathieudutour/github-tag-action@v6.2
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Change version in velocity-plugin.json
+        run: |
+          before="${{ steps.tag_version.outputs.new_tag }}"
+          after="${before//v/}"
+          sed -i -e "s/1.0-SNAPSHOT/$after/i" './velocity/src/main/resources/velocity-plugin.json'
+
+      - name: Change wrapper permissions
+        run: chmod +x ./gradlew
+
+      - name: Build with Gradle
+        run: ./gradlew build
+
+      - name: Create a GitHub release
+        id: create_release
+        uses: ncipollo/release-action@v1
+        with:
+          tag: ${{ steps.tag_version.outputs.new_tag }}
+          name: Release ${{ steps.tag_version.outputs.new_tag }}
+          body: ${{ steps.tag_version.outputs.changelog }}
+
+      - name: Upload Velocity JAR
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./velocity/build/libs/NoticeConnect-Velocity-1.0-SNAPSHOT.jar
+          asset_name: NoticeConnect-Velocity_${{ steps.tag_version.outputs.new_tag }}.jar
+          asset_content_type: application/jar
+
+      - name: Upload Paper JAR
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./paper/build/libs/NoticeConnect-Paper-1.0-SNAPSHOT.jar
+          asset_name: NoticeConnect-Paper_${{ steps.tag_version.outputs.new_tag }}.jar
+          asset_content_type: application/jar

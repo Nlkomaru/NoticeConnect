@@ -1,0 +1,105 @@
+name: PR Preview Build
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      commit_sha: ${{ steps.vars.outputs.commit_sha }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set short git commit SHA
+        id: vars
+        run: echo "commit_sha=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+  build:
+    needs: setup
+    runs-on: ubuntu-latest
+    env:
+      COMMIT_SHORT_SHA: ${{ needs.setup.outputs.commit_sha }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: true
+
+      - name: Change wrapper permissions
+        run: chmod +x ./gradlew
+
+      - name: Build with Gradle
+        run: ./gradlew build
+
+      - name: Prepare artifacts
+        run: |
+          mkdir -p ./artifacts
+          cp ./velocity/build/libs/NoticeConnect-Velocity-*.jar ./artifacts/NoticeConnect-Velocity-${{ env.COMMIT_SHORT_SHA }}.jar 2>/dev/null || true
+          cp ./paper/build/libs/NoticeConnect-Paper-*.jar ./artifacts/NoticeConnect-Paper-${{ env.COMMIT_SHORT_SHA }}.jar 2>/dev/null || true
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: jars
+          path: ./artifacts/
+          retention-days: 7
+
+  release:
+    needs: [setup, build]
+    runs-on: ubuntu-latest
+    env:
+      COMMIT_SHORT_SHA: ${{ needs.setup.outputs.commit_sha }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download JAR artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: jars
+          path: ./artifacts
+
+      - name: Create preview release
+        run: |
+          TAG_NAME="preview-pr${{ github.event.pull_request.number }}-${{ env.COMMIT_SHORT_SHA }}"
+
+          gh release create "$TAG_NAME" \
+            --title "Preview: PR #${{ github.event.pull_request.number }} (${{ env.COMMIT_SHORT_SHA }})" \
+            --notes "Preview build for PR #${{ github.event.pull_request.number }}
+
+          **Commit:** ${{ github.sha }}
+          **Branch:** ${{ github.head_ref }}
+
+          > This is a preview build and may be unstable." \
+            --prerelease \
+            ./artifacts/*.jar
+
+      - name: Comment PR
+        run: |
+          RELEASE_URL="https://github.com/${{ github.repository }}/releases/tag/preview-pr${{ github.event.pull_request.number }}-${{ env.COMMIT_SHORT_SHA }}"
+          DOWNLOAD_BASE="https://github.com/${{ github.repository }}/releases/download/preview-pr${{ github.event.pull_request.number }}-${{ env.COMMIT_SHORT_SHA }}"
+
+          cat <<EOF > comment.md
+          ## Preview Build
+
+          | Artifact | Download |
+          |----------|----------|
+          | Velocity | [NoticeConnect-Velocity-${{ env.COMMIT_SHORT_SHA }}.jar]($DOWNLOAD_BASE/NoticeConnect-Velocity-${{ env.COMMIT_SHORT_SHA }}.jar) |
+          | Paper | [NoticeConnect-Paper-${{ env.COMMIT_SHORT_SHA }}.jar]($DOWNLOAD_BASE/NoticeConnect-Paper-${{ env.COMMIT_SHORT_SHA }}.jar) |
+
+          [Release Page]($RELEASE_URL)
+          EOF
+
+          gh pr comment ${{ github.event.pull_request.number }} --body-file comment.md
