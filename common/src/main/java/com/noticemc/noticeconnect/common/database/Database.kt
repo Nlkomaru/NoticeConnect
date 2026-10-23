@@ -153,6 +153,11 @@ object Database {
      * まだ mc-api に同期していない UUID を、[afterUuid] より後ろから UUID 順に最大 [limit] 件返す。
      * 形式が壊れた UUID も含まれるので、呼び出し側で除外する (カーソルで進めるので無限ループしない)。
      */
+    /** まだ mc-api に送っていない行 (`LAST_SYNCED_AT IS NULL`) の件数。一括同期の進み具合のログに使う。 */
+    fun countUnsynced(): Long = transaction(requireDb()) {
+        JoinedPlayerList.selectAll().where { JoinedPlayerList.lastSyncedAt.isNull() }.count()
+    }
+
     fun unsyncedUuids(afterUuid: String, limit: Int): List<String> = transaction(requireDb()) {
         JoinedPlayerList.select(JoinedPlayerList.uuid)
             .where { JoinedPlayerList.lastSyncedAt.isNull() and (JoinedPlayerList.uuid greater afterUuid) }

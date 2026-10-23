@@ -131,7 +131,7 @@ When `mcApi.enabled` is `true`, NoticeConnect registers players to mc-api.
   mc-api refreshes the profile from upstream when it is older than 24 hours.
   Any 2xx response counts as success and updates `LAST_SYNCED_AT`. Failures are logged once at warn level until a request succeeds again. The token is never logged.
 - On startup / reload, and with `/noticeconnect sync` (permission `noticeconnect.sync`), rows that have never been synced
-  (`LAST_SYNCED_AT IS NULL`) are sent to `POST <mcApi.url>/v1/players/batch` in batches of 100
+  (`LAST_SYNCED_AT IS NULL`) are sent to `POST <mcApi.url>/v1/players/batch` in batches of 25 (60s timeout per batch)
   (`{"uuids": [...], "fetch": false}`), one batch per second.
   Malformed UUIDs in old data are skipped. If a batch fails, the sync stops and resumes on the next run.
   The config is re-read before every batch: the sync stops when `mcApi` is disabled, and the current `url` / `token` are used.
