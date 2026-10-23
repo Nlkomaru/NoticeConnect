@@ -14,6 +14,7 @@ import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.time.Duration
+import java.util.concurrent.CompletableFuture
 
 object Utils {
 
@@ -37,8 +38,20 @@ object Utils {
         .connectTimeout(Duration.ofSeconds(10))
         .build()
 
+    /** [webhookTail] の差し替えを守るロック。 */
+    private val webhookLock = Any()
+
+    /**
+     * 最後に積んだ Webhook 送信の完了を表す Future。
+     * 次の送信はこれが終わってから始めるので、Discord には積んだ順に届く
+     * (sendAsync をそのまま並べると、接続が別になって後の送信が先に着くことがある)。
+     */
+    private var webhookTail: CompletableFuture<*> = CompletableFuture.completedFuture(null)
+
     /**
      * Discord の Webhook に送る。非同期で、呼び出し元のスレッドは塞がない。
+     * 送信は呼び出し順に 1 件ずつ行う (前の送信が終わってから次を始める)。
+     * 各リクエストには 10 秒のタイムアウトがあるので、1 件が詰まっても後続が止まり続けることはない。
      */
     fun DiscordWebhookData.sendWebHook() {
         val url = CustomConfig.config.discord.url
@@ -59,13 +72,18 @@ object Utils {
             return
         }
 
-        httpClient.sendAsync(request, HttpResponse.BodyHandlers.discarding())
-            .whenComplete { response, error ->
-                val logger = NoticeConnectPlatform.bridge.logger
-                when {
-                    error != null -> logger.warn("Failed to send the Discord webhook: ${error.message}")
-                    response.statusCode() !in 200..299 -> logger.warn("error:${response.statusCode()}")
+        synchronized(webhookLock) {
+            // 前の送信の成否は問わない (失敗はその送信のログに出している)。終わったら次を送る
+            webhookTail = webhookTail
+                .handle { _, _ -> null }
+                .thenCompose { httpClient.sendAsync(request, HttpResponse.BodyHandlers.discarding()) }
+                .whenComplete { response, error ->
+                    val logger = NoticeConnectPlatform.bridge.logger
+                    when {
+                        error != null -> logger.warn("Failed to send the Discord webhook: ${error.message}")
+                        response.statusCode() !in 200..299 -> logger.warn("error:${response.statusCode()}")
+                    }
                 }
-            }
+        }
     }
 }
