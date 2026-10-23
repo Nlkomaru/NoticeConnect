@@ -74,13 +74,14 @@ object McApiClient {
 
     /**
      * 一度も同期していない行 (`LAST_SYNCED_AT IS NULL`) を 100 件ずつ、1 秒に 1 バッチの間隔で登録する。
+     * 設定はバッチごとに読み直す (途中で無効にされたら止める)。
      * 失敗したらそこで止める (次回の起動か `/noticeconnect sync` で続きから再開する)。
      *
      * @return 開始したら true、無効または実行中なら false
      */
     fun startBackfill(): Boolean {
         if (stopped) return false
-        val config = activeConfig() ?: return false
+        if (activeConfig() == null) return false
         if (!backfillRunning.compareAndSet(false, true)) return false
         val logger = NoticeConnectPlatform.bridge.logger
         val thread = Thread({
@@ -89,6 +90,14 @@ object McApiClient {
             try {
                 // 停止要求が来たら次のバッチに進まずに抜ける
                 while (!stopped) {
+                    // リロードで設定が変わることがあるので、バッチごとに設定を読み直す。
+                    // 無効になったら止め、URL とトークンは最新のものを使う
+                    val config = activeConfig()
+                    if (config == null) {
+                        logger.info("mc-api backfill stopped after $synced player(s) because mcApi was disabled")
+                        return@Thread // finally でフラグは戻る
+
+                    }
                     val rows = DatabaseExecutor.submit { Database.unsyncedUuids(cursor, BATCH_SIZE) }.get()
                     if (rows.isEmpty()) break
                     cursor = rows.last()
