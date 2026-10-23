@@ -14,6 +14,8 @@ class PlayerJoinListener : Listener {
         // バニラの参加メッセージを抑制
         event.joinMessage(null)
 
+        // Paper にはプロキシのようなサーバー名が無いので、Bukkit のサーバー名を使う。
+        // <currentServerName> の置換と LAST_SERVER の記録の両方にこの値を使う
         val serverName = player.server.name
         val hasPermissionHide = player.hasPermission("noticeconnect.hide.join")
 

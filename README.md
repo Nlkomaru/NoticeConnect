@@ -80,6 +80,16 @@ discord {
         left = "%(PlayerName) さんがサーバーから退出しました"
     }
     url = "https://discord.com/api/webhooks/*********/**************"
+    ## Icon URL of the embed. %(UUID) and %(PlayerName) are replaced.
+    ## When empty: <mcApi.url>/avatar/<uuid> if mcApi is enabled, otherwise https://crafthead.net/avatar/<uuid>
+    avatarUrl = ""
+}
+## mc-api integration. On every join, POST <url>/api/assign with {"uuid", "name"}
+## (Authorization: Bearer <token>). Only used when enabled = true and url / token are set.
+mcApi {
+    enabled = false
+    url = "https://mc-api.morinoparty.workers.dev"
+    token = ""
 }
 message {
     ## The message that will be sent to players on the server, randomly selected from an array
@@ -108,3 +118,61 @@ replace {
 ## Config Version Dont touch this
 version = "2.0.0"
 ```
+
+`mcApi` and `discord.avatarUrl` are optional. Config files written by older versions keep working without them
+(the defaults above are used); add the blocks manually to enable mc-api.
+
+## mc-api
+
+When `mcApi.enabled` is `true`, NoticeConnect registers players to mc-api.
+
+- On every join (Velocity: first connection to the proxy, Paper: `PlayerJoinEvent`), it sends
+  `POST <mcApi.url>/api/assign` with `{"uuid": "<uuid>", "name": "<name>"}` asynchronously (10s timeout).
+  Failures are logged once at warn level until a request succeeds again. The token is never logged.
+- On startup / reload, and with `/noticeconnect sync` (permission `noticeconnect.sync`), rows that have never been synced
+  (`LAST_SYNCED_AT IS NULL`) are sent in batches of 100 (`{"uuids": [...], "fetch": false}`), one batch per second.
+  Malformed UUIDs in old data are skipped. If a batch fails, the sync stops and resumes on the next run.
+  The config is re-read before every batch: the sync stops when `mcApi` is disabled, and the current `url` / `token` are used.
+
+## Database
+
+The SQLite file is `<data directory>/<database.database>.db`, accessed with [Exposed](https://github.com/JetBrains/Exposed).
+
+Table `JoinedPlayerList`:
+
+| Column | Type | Description |
+| --- | --- | --- |
+| `UUID` | VARCHAR(40) NOT NULL | Player UUID (unique index when there are no duplicates) |
+| `NAME` | VARCHAR(32) NULL | Last known player name (empty for rows recorded before this column existed) |
+| `FIRST_JOINED_AT` | BIGINT NULL | First join time (epoch millis). Only set when a row is inserted, so it is empty for legacy rows that existed before this column was added |
+| `LAST_JOINED_AT` | BIGINT NULL | Last join time (epoch millis) |
+| `LAST_SYNCED_AT` | BIGINT NULL | Last time the player was registered to mc-api (epoch millis) |
+| `LAST_LEFT_AT` | BIGINT NULL | Last leave time (epoch millis) |
+| `JOIN_COUNT` | INT NULL | Number of joins. Empty means 0: legacy rows start counting from 1 on their next join |
+| `PLAYTIME_SECONDS` | BIGINT NULL | Total play time in seconds. Empty means 0 |
+| `LAST_SERVER` | VARCHAR(64) NULL | Server the player was last on (Velocity: updated on join and on every server switch; Paper: the Bukkit server name) |
+
+Every join is recorded: a new row is inserted on the first join (`JOIN_COUNT = 1`), otherwise `NAME`,
+`LAST_JOINED_AT`, `LAST_SERVER` are updated and `JOIN_COUNT` is incremented.
+On leave, `LAST_LEFT_AT` is updated and the session length (leave time minus the join time kept in memory) is added
+to `PLAYTIME_SECONDS`. Sessions whose start is unknown (e.g. the player joined before a restart or reload) or that are
+longer than 7 days are not counted. Leaves that happen after the plugin has stopped its database thread may not be recorded.
+
+Table `PlayerNameHistory`:
+
+| Column | Type | Description |
+| --- | --- | --- |
+| `UUID` | VARCHAR(40) NOT NULL | Player UUID |
+| `NAME` | VARCHAR(32) NOT NULL | Player name |
+| `FIRST_SEEN_AT` | BIGINT NOT NULL | First time the player joined with this name (epoch millis) |
+| `LAST_SEEN_AT` | BIGINT NOT NULL | Last time the player joined with this name (epoch millis) |
+
+`(UUID, NAME)` has a unique index. On every join the pair is inserted if it is new, otherwise `LAST_SEEN_AT` is updated.
+Names recorded before this table existed (only in `JoinedPlayerList.NAME`) are not copied into the history.
+
+On startup the schema is migrated automatically and without data loss: missing tables are created, missing columns
+are added with `ALTER TABLE ... ADD` (computed by Exposed's `MigrationUtils`), and the unique index on `UUID` is
+created only if there are no duplicated UUIDs (otherwise a warning is logged). The migration is idempotent.
+
+Join and leave notifications are processed in order on a single database thread, so a leave message is never sent
+before the join message of the same connection.

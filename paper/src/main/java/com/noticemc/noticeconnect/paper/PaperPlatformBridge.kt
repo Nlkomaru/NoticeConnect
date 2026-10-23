@@ -19,6 +19,13 @@ class PaperPlatformBridge(
     override val logger: Logger = LoggerFactory.getLogger(plugin.name)
 
     override fun broadcastMessage(message: Component, mode: String) {
+        // 参加時の処理は DB スレッドから呼ばれるので、送信はメインスレッドで行う
+        if (!Bukkit.isPrimaryThread()) {
+            if (plugin.isEnabled) {
+                Bukkit.getScheduler().runTask(plugin, Runnable { broadcastMessage(message, mode) })
+            }
+            return
+        }
         val audience: Audience = Bukkit.getServer()
 
         when (mode) {

@@ -1,7 +1,7 @@
 package com.noticemc.noticeconnect.velocity.commands
 
-import com.noticemc.noticeconnect.common.database.Database
 import com.noticemc.noticeconnect.common.files.CustomConfig
+import com.noticemc.noticeconnect.common.logic.Lifecycle
 import com.noticemc.noticeconnect.velocity.NoticeConnectVelocity
 import revxrsal.commands.annotation.Command
 import revxrsal.commands.annotation.Description
@@ -13,7 +13,6 @@ import java.nio.file.Path
 @Command("noticeconnect", "ntc")
 @CommandPermission("noticeconnect.reload")
 class ReloadCommand {
-    var sql: Database? = null
     private val dir: Path = NoticeConnectVelocity.path
 
     @Subcommand("reload")
@@ -22,21 +21,8 @@ class ReloadCommand {
         actor.reply("Reloading...")
         val config = CustomConfig()
         config.getConfigFile(dir)
-        sqlConnection()
-        actor.reply("Reloaded!")
-    }
-
-    private fun sqlConnection() {
-        sql = Database()
-        try {
-            sql!!.connect(dir)
-        } catch (e: Exception) {
-            NoticeConnectVelocity.logger.error("Failed to connect to database")
-            e.printStackTrace()
+        Lifecycle.connectDatabase(dir, NoticeConnectVelocity.logger).thenAccept { connected ->
+            actor.reply(if (connected) "Reloaded!" else "Reloaded, but failed to connect to the database")
         }
-        if (Database.isConnected()) {
-            NoticeConnectVelocity.logger.info("Connected to database")
-        }
-        Database.initializeDatabase()
     }
 }

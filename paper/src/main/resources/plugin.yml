@@ -13,6 +13,9 @@ permissions:
   noticeconnect.reload:
     description: Reload NoticeConnect configuration
     default: op
+  noticeconnect.sync:
+    description: Sync players that have never been synced to mc-api
+    default: op
   noticeconnect.message:
     description: Send broadcast messages
     default: op
