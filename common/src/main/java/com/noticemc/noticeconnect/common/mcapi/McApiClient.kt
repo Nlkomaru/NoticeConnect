@@ -38,9 +38,19 @@ data class McApiRequest(val method: String, val url: String, val body: String)
  * すべて非同期で、イベントスレッドを塞がない。トークンはログに出さない。
  */
 object McApiClient {
-    private const val BATCH_SIZE = 100
+    /**
+     * 1 バッチの件数。mc-api 側の上限は 100 件だが、登録 1 件ごとに R2 への書き込みがあり
+     * Workers の同時接続数 (6) で詰まるため、100 件だと応答まで 15 秒以上かかる。小さく分けて送る。
+     */
+    private const val BATCH_SIZE = 25
     private const val BATCH_INTERVAL_MILLIS = 1_000L
     private val TIMEOUT: Duration = Duration.ofSeconds(10)
+
+    /** 一括登録のタイムアウト。件数ぶん時間がかかるので、ログイン時の登録より長く待つ。 */
+    private val BATCH_TIMEOUT: Duration = Duration.ofSeconds(60)
+
+    /** 一括同期の途中経過をコンソールに出す間隔 (バッチ数)。25 件 × 20 = 500 人ごと。 */
+    private const val PROGRESS_LOG_EVERY_BATCHES = 20
 
     /** 失敗の警告を一度だけ出すためのフラグ。成功したら戻す (次の障害でまた警告する)。 */
     private val failureWarned = AtomicBoolean(false)
@@ -73,7 +83,7 @@ object McApiClient {
 
     /**
      * 一括登録リクエスト `POST <url>/v1/players/batch` (ボディ `{"uuids": [...], "fetch": false}`) を組み立てる。
-     * mc-api 側の上限は 1 リクエスト 100 件 ([BATCH_SIZE])。
+     * mc-api 側の上限は 1 リクエスト 100 件。実際に送るのは [BATCH_SIZE] 件ずつ。
      */
     internal fun batchRequest(baseUrl: String, uuids: List<String>): McApiRequest = McApiRequest(
         method = "POST",
@@ -120,7 +130,15 @@ object McApiClient {
         val thread = Thread({
             var cursor = ""
             var synced = 0
+            var batches = 0
             try {
+                // 始める前に件数を出しておく。数千件あると数十分かかるので、進んでいるかをコンソールで追えるようにする
+                val total = DatabaseExecutor.submit { Database.countUnsynced() }.get()
+                if (total == 0L) {
+                    logger.info("mc-api backfill: every player is already synced")
+                    return@Thread
+                }
+                logger.info("mc-api backfill started: $total player(s) to sync in batches of $BATCH_SIZE")
                 // 停止要求が来たら次のバッチに進まずに抜ける
                 while (!stopped) {
                     // リロードで設定が変わることがあるので、バッチごとに設定を読み直す。
@@ -137,12 +155,16 @@ object McApiClient {
                     // 旧データには "<uuid>-<数字>" のような壊れた値があるので、正しい形式だけ送る
                     val uuids = rows.filter(::isCanonicalUuid)
                     if (uuids.isNotEmpty()) {
-                        if (!send(config, batchRequest(config.url, uuids)).get()) {
+                        if (!send(config, batchRequest(config.url, uuids), BATCH_TIMEOUT).get()) {
                             logger.warn("mc-api backfill stopped after $synced player(s); it will resume on the next run")
                             return@Thread
                         }
                         DatabaseExecutor.submit { Database.markSynced(uuids) }.get()
                         synced += uuids.size
+                        batches++
+                        if (batches % PROGRESS_LOG_EVERY_BATCHES == 0) {
+                            logger.info("mc-api backfill: $synced / $total player(s) synced")
+                        }
                     }
                     Thread.sleep(BATCH_INTERVAL_MILLIS)
                 }
@@ -182,10 +204,10 @@ object McApiClient {
     }
 
     /** Bearer トークン付きで送り、2xx なら true。例外は外に出さず false にする。 */
-    private fun send(config: McApi, call: McApiRequest): CompletableFuture<Boolean> {
+    private fun send(config: McApi, call: McApiRequest, timeout: Duration = TIMEOUT): CompletableFuture<Boolean> {
         val request = try {
             HttpRequest.newBuilder(URI.create(call.url))
-                .timeout(TIMEOUT)
+                .timeout(timeout)
                 .header("Authorization", "Bearer ${config.token}")
                 .header("Content-Type", "application/json")
                 .method(call.method, HttpRequest.BodyPublishers.ofString(call.body))
