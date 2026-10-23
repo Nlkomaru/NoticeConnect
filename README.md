@@ -81,10 +81,10 @@ discord {
     }
     url = "https://discord.com/api/webhooks/*********/**************"
     ## Icon URL of the embed. %(UUID) and %(PlayerName) are replaced.
-    ## When empty: <mcApi.url>/avatar/<uuid> if mcApi is enabled, otherwise https://crafthead.net/avatar/<uuid>
+    ## When empty: <mcApi.url>/v1/players/<uuid>/avatar?size=64 if mcApi is enabled, otherwise https://crafthead.net/avatar/<uuid>
     avatarUrl = ""
 }
-## mc-api integration. On every join, POST <url>/api/assign with {"uuid", "name"}
+## mc-api integration. On every join, PUT <url>/v1/players/<uuid> with {"name"}
 ## (Authorization: Bearer <token>). Only used when enabled = true and url / token are set.
 mcApi {
     enabled = false
@@ -127,12 +127,17 @@ version = "2.0.0"
 When `mcApi.enabled` is `true`, NoticeConnect registers players to mc-api.
 
 - On every join (Velocity: first connection to the proxy, Paper: `PlayerJoinEvent`), it sends
-  `POST <mcApi.url>/api/assign` with `{"uuid": "<uuid>", "name": "<name>"}` asynchronously (10s timeout).
-  Failures are logged once at warn level until a request succeeds again. The token is never logged.
+  `PUT <mcApi.url>/v1/players/<uuid>` with `{"name": "<name>"}` asynchronously (10s timeout).
+  mc-api refreshes the profile from upstream when it is older than 24 hours.
+  Any 2xx response counts as success and updates `LAST_SYNCED_AT`. Failures are logged once at warn level until a request succeeds again. The token is never logged.
 - On startup / reload, and with `/noticeconnect sync` (permission `noticeconnect.sync`), rows that have never been synced
-  (`LAST_SYNCED_AT IS NULL`) are sent in batches of 100 (`{"uuids": [...], "fetch": false}`), one batch per second.
+  (`LAST_SYNCED_AT IS NULL`) are sent to `POST <mcApi.url>/v1/players/batch` in batches of 100
+  (`{"uuids": [...], "fetch": false}`), one batch per second.
   Malformed UUIDs in old data are skipped. If a batch fails, the sync stops and resumes on the next run.
   The config is re-read before every batch: the sync stops when `mcApi` is disabled, and the current `url` / `token` are used.
+- Both requests send `Authorization: Bearer <mcApi.token>`.
+- When `discord.avatarUrl` is empty and mc-api is enabled, the Discord embed icon is
+  `<mcApi.url>/v1/players/<uuid>/avatar?size=64`.
 
 ## Database
 
