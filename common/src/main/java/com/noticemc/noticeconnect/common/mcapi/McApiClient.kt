@@ -14,6 +14,7 @@ import java.net.http.HttpResponse
 import java.time.Duration
 import java.util.*
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -38,6 +39,14 @@ object McApiClient {
 
     /** 一括同期が走っているか (多重起動を防ぐ)。 */
     private val backfillRunning = AtomicBoolean(false)
+
+    /** 停止要求のフラグ。一度立てたら戻さない (停止後に一括同期を始めないため)。 */
+    @Volatile
+    private var stopped = false
+
+    /** 実行中の一括同期スレッド。[shutdown] で割り込むために持つ。 */
+    @Volatile
+    private var backfillThread: Thread? = null
 
     private val json = Json { encodeDefaults = true }
 
@@ -70,14 +79,16 @@ object McApiClient {
      * @return 開始したら true、無効または実行中なら false
      */
     fun startBackfill(): Boolean {
+        if (stopped) return false
         val config = activeConfig() ?: return false
         if (!backfillRunning.compareAndSet(false, true)) return false
         val logger = NoticeConnectPlatform.bridge.logger
-        Thread({
+        val thread = Thread({
             var cursor = ""
             var synced = 0
             try {
-                while (true) {
+                // 停止要求が来たら次のバッチに進まずに抜ける
+                while (!stopped) {
                     val rows = DatabaseExecutor.submit { Database.unsyncedUuids(cursor, BATCH_SIZE) }.get()
                     if (rows.isEmpty()) break
                     cursor = rows.last()
@@ -94,16 +105,39 @@ object McApiClient {
                     }
                     Thread.sleep(BATCH_INTERVAL_MILLIS)
                 }
-                if (synced > 0) logger.info("mc-api backfill finished: $synced player(s) synced")
+                if (!stopped && synced > 0) logger.info("mc-api backfill finished: $synced player(s) synced")
             } catch (e: InterruptedException) {
+                // shutdown() による割り込み。未同期の行は次回の起動で続きから送る
                 Thread.currentThread().interrupt()
+            } catch (e: RejectedExecutionException) {
+                // 停止中に DB executor が閉じられた。停止時の正常な経路なので警告しない
             } catch (e: Exception) {
-                logger.warn("mc-api backfill failed: ${e.message}")
+                if (!stopped) logger.warn("mc-api backfill failed: ${e.message}")
             } finally {
+                backfillThread = null
                 backfillRunning.set(false)
             }
-        }, "NoticeConnect-McApiBackfill").apply { isDaemon = true }.start()
+        }, "NoticeConnect-McApiBackfill").apply { isDaemon = true }
+        backfillThread = thread
+        thread.start()
         return true
+    }
+
+    /**
+     * 一括同期を止める。DB executor を止める前に呼ぶ。
+     *
+     * フラグを立ててスレッドに割り込み (HTTP や DB の待ち、sleep から抜ける)、終了を少しだけ待つ。
+     * Paper ではプラグインのクラスローダーが閉じられた後にスレッドが残らないようにするため。
+     */
+    fun shutdown() {
+        stopped = true
+        val thread = backfillThread ?: return
+        thread.interrupt()
+        try {
+            thread.join(TIMEOUT.toMillis())
+        } catch (e: InterruptedException) {
+            Thread.currentThread().interrupt()
+        }
     }
 
     /** POST して 2xx なら true。例外は外に出さず false にする。 */

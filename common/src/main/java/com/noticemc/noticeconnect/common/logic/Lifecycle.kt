@@ -35,8 +35,10 @@ object Lifecycle {
             connected
         }
 
-    /** DB の処理を流し切ってから接続を閉じる。 */
+    /** mc-api の一括同期を止め、DB の処理を流し切ってから接続を閉じる。 */
     fun shutdown() {
+        // 一括同期のスレッドは DB executor を使うので、先に止める
+        McApiClient.shutdown()
         DatabaseExecutor.shutdown()
         Database.disconnect()
     }
