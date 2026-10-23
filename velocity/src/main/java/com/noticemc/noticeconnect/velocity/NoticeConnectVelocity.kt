@@ -12,6 +12,7 @@ import com.noticemc.noticeconnect.velocity.commands.command.RegisteredServerPars
 import com.noticemc.noticeconnect.velocity.events.PlayerJoinEvent
 import com.noticemc.noticeconnect.velocity.events.PlayerLeftEvent
 import com.noticemc.noticeconnect.velocity.events.PlayerLoginEvent
+import com.noticemc.noticeconnect.velocity.events.PlayerServerSwitchEvent
 import com.velocitypowered.api.event.Subscribe
 import com.velocitypowered.api.event.proxy.ProxyInitializeEvent
 import com.velocitypowered.api.event.proxy.ProxyShutdownEvent
@@ -56,6 +57,7 @@ class NoticeConnectVelocity {
         proxy.eventManager?.register(this, PlayerJoinEvent())
         proxy.eventManager?.register(this, PlayerLeftEvent())
         proxy.eventManager?.register(this, PlayerLoginEvent())
+        proxy.eventManager?.register(this, PlayerServerSwitchEvent())
     }
 
     private fun registerCommands() {
