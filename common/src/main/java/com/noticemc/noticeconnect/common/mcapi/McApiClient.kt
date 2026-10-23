@@ -18,14 +18,22 @@ import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
+/** `PUT /v1/players/{uuid}` のボディ。uuid はパスで渡す。 */
 @Serializable
-data class AssignRequest(val uuid: String, val name: String)
+data class RegisterPlayerRequest(val name: String)
 
+/** `POST /v1/players/batch` のボディ。`fetch = false` は登録してキューに積むだけ (上流には問い合わせない)。 */
 @Serializable
-data class BulkAssignRequest(val uuids: List<String>, val fetch: Boolean)
+data class BatchRegisterRequest(val uuids: List<String>, val fetch: Boolean)
 
 /**
- * mc-api (`<mcApi.url>/api/assign`) へプレイヤーを登録するクライアント。
+ * mc-api に送るリクエストの中身 (HTTP メソッド、URL、JSON ボディ)。
+ * 組み立てを純粋関数にしてテストできるようにするため、[java.net.http.HttpRequest] とは分けている。
+ */
+data class McApiRequest(val method: String, val url: String, val body: String)
+
+/**
+ * mc-api (`<mcApi.url>/v1/players/...`) へプレイヤーを登録するクライアント。
  *
  * すべて非同期で、イベントスレッドを塞がない。トークンはログに出さない。
  */
@@ -50,6 +58,32 @@ object McApiClient {
 
     private val json = Json { encodeDefaults = true }
 
+    /** 末尾の `/` を除いたベース URL に、v1 のプレイヤー API のパスをつなげる。 */
+    private fun playersUrl(baseUrl: String): String = baseUrl.trimEnd('/') + "/v1/players"
+
+    /**
+     * ログイン時の登録リクエスト `PUT <url>/v1/players/<uuid>` (ボディ `{"name": "<name>"}`) を組み立てる。
+     * 24 時間以上前のプロフィールは mc-api 側で上流から取り直される。
+     */
+    internal fun registerRequest(baseUrl: String, uuid: UUID, name: String): McApiRequest = McApiRequest(
+        method = "PUT",
+        url = "${playersUrl(baseUrl)}/$uuid",
+        body = json.encodeToString(RegisterPlayerRequest.serializer(), RegisterPlayerRequest(name)),
+    )
+
+    /**
+     * 一括登録リクエスト `POST <url>/v1/players/batch` (ボディ `{"uuids": [...], "fetch": false}`) を組み立てる。
+     * mc-api 側の上限は 1 リクエスト 100 件 ([BATCH_SIZE])。
+     */
+    internal fun batchRequest(baseUrl: String, uuids: List<String>): McApiRequest = McApiRequest(
+        method = "POST",
+        url = "${playersUrl(baseUrl)}/batch",
+        body = json.encodeToString(BatchRegisterRequest.serializer(), BatchRegisterRequest(uuids, false)),
+    )
+
+    /** mc-api が返す 64px の顔画像の URL (`<url>/v1/players/<uuid>/avatar?size=64`)。 */
+    internal fun mcApiAvatarUrl(baseUrl: String, uuid: UUID): String = "${playersUrl(baseUrl)}/$uuid/avatar?size=64"
+
     /** 設定が有効で、URL とトークンがそろっているときだけ設定を返す。 */
     private fun activeConfig(): McApi? {
         val config = CustomConfig.config.mcApi
@@ -64,8 +98,7 @@ object McApiClient {
      */
     fun assign(uuid: UUID, name: String) {
         val config = activeConfig() ?: return
-        val body = json.encodeToString(AssignRequest.serializer(), AssignRequest(uuid.toString(), name))
-        post(config, body).thenAccept { ok ->
+        send(config, registerRequest(config.url, uuid, name)).thenAccept { ok ->
             if (ok) {
                 DatabaseExecutor.execute { runCatching { Database.markSynced(listOf(uuid.toString())) } }
             }
@@ -104,8 +137,7 @@ object McApiClient {
                     // 旧データには "<uuid>-<数字>" のような壊れた値があるので、正しい形式だけ送る
                     val uuids = rows.filter(::isCanonicalUuid)
                     if (uuids.isNotEmpty()) {
-                        val body = json.encodeToString(BulkAssignRequest.serializer(), BulkAssignRequest(uuids, false))
-                        if (!post(config, body).get()) {
+                        if (!send(config, batchRequest(config.url, uuids)).get()) {
                             logger.warn("mc-api backfill stopped after $synced player(s); it will resume on the next run")
                             return@Thread
                         }
@@ -149,14 +181,14 @@ object McApiClient {
         }
     }
 
-    /** POST して 2xx なら true。例外は外に出さず false にする。 */
-    private fun post(config: McApi, body: String): CompletableFuture<Boolean> {
+    /** Bearer トークン付きで送り、2xx なら true。例外は外に出さず false にする。 */
+    private fun send(config: McApi, call: McApiRequest): CompletableFuture<Boolean> {
         val request = try {
-            HttpRequest.newBuilder(URI.create(config.url.trimEnd('/') + "/api/assign"))
+            HttpRequest.newBuilder(URI.create(call.url))
                 .timeout(TIMEOUT)
                 .header("Authorization", "Bearer ${config.token}")
                 .header("Content-Type", "application/json")
-                .POST(HttpRequest.BodyPublishers.ofString(body))
+                .method(call.method, HttpRequest.BodyPublishers.ofString(call.body))
                 .build()
         } catch (e: IllegalArgumentException) {
             warnOnce("invalid mcApi.url")
@@ -202,7 +234,7 @@ object McApiClient {
         }
         val mcApi = CustomConfig.config.mcApi
         if (mcApi.enabled && mcApi.url.isNotBlank()) {
-            return "${mcApi.url.trimEnd('/')}/avatar/$uuid"
+            return mcApiAvatarUrl(mcApi.url, uuid)
         }
         return "https://crafthead.net/avatar/$uuid"
     }

@@ -15,7 +15,7 @@ data class DiscordMessage(val firstJoin: String, val join: String, val left: Str
 
 /**
  * @property avatarUrl 埋め込みのアイコン URL。`%(UUID)` と `%(PlayerName)` を置換する。
- *   空なら mcApi が有効のとき `<mcApi.url>/avatar/<uuid>`、無効のとき crafthead を使う。
+ *   空なら mcApi が有効のとき `<mcApi.url>/v1/players/<uuid>/avatar?size=64`、無効のとき crafthead を使う。
  */
 @Serializable
 data class Discord(val url: String, val message: DiscordMessage, val avatarUrl: String = "")
