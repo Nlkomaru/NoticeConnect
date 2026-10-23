@@ -11,6 +11,8 @@ import java.nio.file.Path
 import kotlin.io.path.createFile
 import kotlin.io.path.exists
 
+// 注意: この値が設定ファイルの version と異なると、設定ファイルは既定値で上書きされる。
+// 項目を追加しただけ (既定値付きで、古い設定ファイルのままでも読める) の場合は上げないこと。
 private const val ver = "2.0.0"
 private const val firstMessage = "<gray>[<yellow>初見さんいらっしゃい</yellow>] <light_purple><name>さんがはじめて<currentServerName>サーバーに入りました!"
 private const val joinMessage = "<yellow><gold><name></gold>さんが<gold>サーバー<gold><gray>(<currentServerName>)</gray>にやってきました!"

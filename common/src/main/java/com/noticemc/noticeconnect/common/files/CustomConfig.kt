@@ -18,10 +18,14 @@ class CustomConfig {
 
         SerializeConfig.main(file.toPath())
 
-        config = Hocon.decodeFromConfig(ConfigFactory.parseFile(file))
+        config = decode(ConfigFactory.parseFile(file))
     }
 
     companion object {
         lateinit var config: Config
+
+        /** 設定を読み込む。無いキーは data class の既定値になる (古い設定ファイルとの互換)。 */
+        @OptIn(ExperimentalSerializationApi::class)
+        fun decode(source: com.typesafe.config.Config): Config = Hocon.decodeFromConfig(source)
     }
 }

@@ -1,6 +1,6 @@
 [versions]
-kotlin = "2.1.10"
-serialization = "1.7.3"
+kotlin = "2.3.20"
+serialization = "1.11.0"
 typesafe = "1.4.3"
 adventure = "4.19.0"
 sqlite = "3.49.1.0"
@@ -10,6 +10,7 @@ paper = "1.21.4-R0.1-SNAPSHOT"
 shadow = "8.3.6"
 commons-lang = "3.17.0"
 configurate = "4.2.0"
+exposed = "1.6.0"
 
 [libraries]
 kotlin-stdlib = { group = "org.jetbrains.kotlin", name = "kotlin-stdlib-jdk8" }
@@ -28,6 +29,10 @@ velocity-api = { group = "com.velocitypowered", name = "velocity-api", version.r
 paper-api = { group = "io.papermc.paper", name = "paper-api", version.ref = "paper" }
 commons-lang3 = { group = "org.apache.commons", name = "commons-lang3", version.ref = "commons-lang" }
 configurate-hocon = { group = "org.spongepowered", name = "configurate-hocon", version.ref = "configurate" }
+exposed-core = { group = "org.jetbrains.exposed", name = "exposed-core", version.ref = "exposed" }
+exposed-jdbc = { group = "org.jetbrains.exposed", name = "exposed-jdbc", version.ref = "exposed" }
+exposed-migration-jdbc = { group = "org.jetbrains.exposed", name = "exposed-migration-jdbc", version.ref = "exposed" }
+slf4j-simple = { group = "org.slf4j", name = "slf4j-simple", version = "2.0.16" }
 slf4j-api = { group = "org.slf4j", name = "slf4j-api", version = "2.0.16" }
 
 [plugins]
@@ -38,3 +43,4 @@ shadow = { id = "com.gradleup.shadow", version.ref = "shadow" }
 [bundles]
 adventure = ["adventure-api", "adventure-minimessage", "adventure-gson", "adventure-legacy"]
 serialization = ["kotlinx-serialization-hocon", "kotlinx-serialization-json"]
+exposed = ["exposed-core", "exposed-jdbc", "exposed-migration-jdbc"]

@@ -9,10 +9,11 @@ import net.kyori.adventure.text.Component
 import net.kyori.adventure.text.minimessage.MiniMessage
 import net.kyori.adventure.text.serializer.gson.GsonComponentSerializer
 import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer
-import java.io.OutputStream
-import java.net.HttpURLConnection
-import java.net.URL
-import javax.net.ssl.HttpsURLConnection
+import java.net.URI
+import java.net.http.HttpClient
+import java.net.http.HttpRequest
+import java.net.http.HttpResponse
+import java.time.Duration
 
 object Utils {
 
@@ -31,37 +32,40 @@ object Utils {
         return GsonComponentSerializer.gson().serialize(this)
     }
 
+    /** プラグイン全体で共有する HTTP クライアント (Discord の Webhook と mc-api)。 */
+    val httpClient: HttpClient = HttpClient.newBuilder()
+        .connectTimeout(Duration.ofSeconds(10))
+        .build()
+
+    /**
+     * Discord の Webhook に送る。非同期で、呼び出し元のスレッドは塞がない。
+     */
     fun DiscordWebhookData.sendWebHook() {
-        val json = Json.encodeToString(this)
         val url = CustomConfig.config.discord.url
         if (url.isBlank()) {
             return
         }
+        val json = Json.encodeToString(this)
 
-        try {
-            val webHookUrl = URL(url)
-            val con: HttpsURLConnection = (webHookUrl.openConnection() as HttpsURLConnection)
-
-            con.addRequestProperty("Content-Type", "application/JSON; charset=utf-8")
-            con.addRequestProperty("User-Agent", "DiscordBot")
-            con.doOutput = true
-            con.requestMethod = "POST"
-
-            con.setRequestProperty("Content-Length", json.length.toString())
-
-            val stream: OutputStream = con.outputStream
-            stream.write(json.toByteArray(Charsets.UTF_8))
-            stream.flush()
-            stream.close()
-
-            val status: Int = con.responseCode
-            if (status != HttpURLConnection.HTTP_OK && status != HttpURLConnection.HTTP_NO_CONTENT) {
-                NoticeConnectPlatform.bridge.logger.warn("error:$status")
-            }
-            con.disconnect()
-
-        } catch (e: Exception) {
-            e.printStackTrace()
+        val request = try {
+            HttpRequest.newBuilder(URI.create(url))
+                .timeout(Duration.ofSeconds(10))
+                .header("Content-Type", "application/json; charset=utf-8")
+                .header("User-Agent", "DiscordBot")
+                .POST(HttpRequest.BodyPublishers.ofString(json, Charsets.UTF_8))
+                .build()
+        } catch (e: IllegalArgumentException) {
+            NoticeConnectPlatform.bridge.logger.warn("Invalid discord.url")
+            return
         }
+
+        httpClient.sendAsync(request, HttpResponse.BodyHandlers.discarding())
+            .whenComplete { response, error ->
+                val logger = NoticeConnectPlatform.bridge.logger
+                when {
+                    error != null -> logger.warn("Failed to send the Discord webhook: ${error.message}")
+                    response.statusCode() !in 200..299 -> logger.warn("error:${response.statusCode()}")
+                }
+            }
     }
 }

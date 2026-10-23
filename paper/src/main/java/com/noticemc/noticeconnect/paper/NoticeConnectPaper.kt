@@ -1,47 +1,33 @@
 package com.noticemc.noticeconnect.paper
 
-import com.noticemc.noticeconnect.common.database.Database
 import com.noticemc.noticeconnect.common.files.CustomConfig
+import com.noticemc.noticeconnect.common.logic.Lifecycle
 import com.noticemc.noticeconnect.common.platform.NoticeConnectPlatform
 import com.noticemc.noticeconnect.paper.commands.HelpCommand
 import com.noticemc.noticeconnect.paper.commands.MessageCommand
 import com.noticemc.noticeconnect.paper.commands.ReloadCommand
+import com.noticemc.noticeconnect.paper.commands.SyncCommand
 import com.noticemc.noticeconnect.paper.events.PlayerJoinListener
 import com.noticemc.noticeconnect.paper.events.PlayerQuitListener
 import org.bukkit.plugin.java.JavaPlugin
 import revxrsal.commands.bukkit.BukkitCommandHandler
 import revxrsal.commands.ktx.supportSuspendFunctions
-import java.sql.Connection
 
 class NoticeConnectPaper : JavaPlugin() {
-    private var sql: Database? = null
 
     override fun onEnable() {
         NoticeConnectPlatform.bridge = PaperPlatformBridge(this)
 
         CustomConfig().getConfigFile(dataFolder.toPath())
-        sqlConnection()
-        logger.info("今までに${joinedPlayerCount()}人のプレイヤーがサーバーを訪れました")
+        // 起動時は移行が終わるまで待つ (参加イベントより先に DB を使えるようにするため)
+        Lifecycle.connectDatabase(dataFolder.toPath(), NoticeConnectPlatform.bridge.logger).join()
 
         registerEvents()
         registerCommands()
     }
 
     override fun onDisable() {
-        Database.disconnect()
-    }
-
-    private fun joinedPlayerCount(): Int {
-        var count = 0
-        try {
-            val connection: Connection? = Database.connection
-            val statement = connection?.prepareStatement("SELECT COUNT(*) FROM JoinedPlayerList")
-            count = statement?.executeQuery()?.getInt(1) ?: 0
-            statement?.close()
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
-        return count
+        Lifecycle.shutdown()
     }
 
     private fun registerEvents() {
@@ -73,20 +59,8 @@ class NoticeConnectPaper : JavaPlugin() {
             register(ReloadCommand(this@NoticeConnectPaper))
             register(HelpCommand())
             register(MessageCommand())
+            register(SyncCommand())
         }
     }
 
-    private fun sqlConnection() {
-        sql = Database()
-        try {
-            sql!!.connect(dataFolder.toPath())
-        } catch (e: Exception) {
-            logger.severe("Failed to connect to database")
-            e.printStackTrace()
-        }
-        if (Database.isConnected()) {
-            logger.info("Connected to database")
-        }
-        Database.initializeDatabase()
-    }
 }

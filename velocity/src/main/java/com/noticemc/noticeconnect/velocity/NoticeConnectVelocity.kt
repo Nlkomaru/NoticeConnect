@@ -1,8 +1,8 @@
 package com.noticemc.noticeconnect.velocity
 
 import com.google.inject.Inject
-import com.noticemc.noticeconnect.common.database.Database
 import com.noticemc.noticeconnect.common.files.CustomConfig
+import com.noticemc.noticeconnect.common.logic.Lifecycle
 import com.noticemc.noticeconnect.common.platform.NoticeConnectPlatform
 import com.noticemc.noticeconnect.common.utils.Utils.mm
 import com.noticemc.noticeconnect.common.utils.Utils.toGsonText
@@ -14,6 +14,7 @@ import com.noticemc.noticeconnect.velocity.events.PlayerLeftEvent
 import com.noticemc.noticeconnect.velocity.events.PlayerLoginEvent
 import com.velocitypowered.api.event.Subscribe
 import com.velocitypowered.api.event.proxy.ProxyInitializeEvent
+import com.velocitypowered.api.event.proxy.ProxyShutdownEvent
 import com.velocitypowered.api.plugin.annotation.DataDirectory
 import com.velocitypowered.api.proxy.ProxyServer
 import org.slf4j.Logger
@@ -24,10 +25,8 @@ import revxrsal.commands.command.ExecutableCommand
 import revxrsal.commands.ktx.supportSuspendFunctions
 import revxrsal.commands.velocity.VelocityCommandHandler
 import java.nio.file.Path
-import java.sql.Connection
 
 class NoticeConnectVelocity {
-    private var sql: Database? = null
 
     @Inject
     fun noticeConnect(server: ProxyServer, logger: Logger, @DataDirectory dataDirectory: Path) {
@@ -38,27 +37,19 @@ class NoticeConnectVelocity {
         NoticeConnectPlatform.bridge = VelocityPlatformBridge(proxy, logger, path)
 
         CustomConfig().getConfigFile(path)
-        sqlConnection()
-        logger.info("今までに" + joinedPlayerCount() + "人のプレイヤーがサーバーを訪れました")
-    }
-
-    private fun joinedPlayerCount(): Int {
-        var count = 0
-        try {
-            val connection: Connection? = Database.connection
-            val statement = connection?.prepareStatement("SELECT COUNT(*) FROM JoinedPlayerList")
-            count = statement?.executeQuery()?.getInt(1) ?: 0
-            statement?.close()
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
-        return count
+        // 起動時は移行が終わるまで待つ (参加イベントより先に DB を使えるようにするため)
+        Lifecycle.connectDatabase(path, logger).join()
     }
 
     @Subscribe
     fun onProxyInitialization(event: ProxyInitializeEvent?) {
         registerEvents()
         registerCommands()
+    }
+
+    @Subscribe
+    fun onProxyShutdown(event: ProxyShutdownEvent?) {
+        Lifecycle.shutdown()
     }
 
     private fun registerEvents() {
@@ -112,22 +103,10 @@ class NoticeConnectVelocity {
             register(MessageCommand())
             register(TransferCommand())
             register(PlayerCommand())
+            register(SyncCommand())
         }
     }
 
-    private fun sqlConnection() {
-        sql = Database()
-        try {
-            sql!!.connect(path)
-        } catch (e: Exception) {
-            logger.error("Failed to connect to database")
-            e.printStackTrace()
-        }
-        if (Database.isConnected()) {
-            logger.info("Connected to database")
-        }
-        Database.initializeDatabase()
-    }
 
     companion object {
         lateinit var proxy: ProxyServer

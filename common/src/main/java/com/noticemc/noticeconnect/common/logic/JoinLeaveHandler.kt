@@ -1,27 +1,52 @@
 package com.noticemc.noticeconnect.common.logic
 
 import com.noticemc.noticeconnect.common.database.Database
+import com.noticemc.noticeconnect.common.database.DatabaseExecutor
 import com.noticemc.noticeconnect.common.discord.Author
 import com.noticemc.noticeconnect.common.discord.DiscordWebhookData
 import com.noticemc.noticeconnect.common.discord.DiscordWebhookEmbed
 import com.noticemc.noticeconnect.common.files.CustomConfig
+import com.noticemc.noticeconnect.common.mcapi.McApiClient
+import com.noticemc.noticeconnect.common.platform.NoticeConnectPlatform
 import com.noticemc.noticeconnect.common.utils.Utils.mm
 import com.noticemc.noticeconnect.common.utils.Utils.sendAudienceMessage
 import com.noticemc.noticeconnect.common.utils.Utils.sendWebHook
 import org.apache.commons.lang3.StringUtils
 import java.awt.Color
-import java.sql.Connection
 import java.util.*
 
 object JoinLeaveHandler {
 
+    /**
+     * 参加時の処理。DB の記録 (初参加かどうかの判定を含む) をメインスレッドの外で行い、
+     * その結果に応じてメッセージと Discord 通知を送り、mc-api に登録する。
+     */
     fun handleJoin(uuid: UUID, playerName: String, serverName: String, hasPermissionHide: Boolean) {
+        DatabaseExecutor.execute {
+            // メッセージの有無に関係なく、参加は必ず記録する (名前と最終参加日時も更新する)
+            val firstJoin = try {
+                Database.recordJoin(uuid, playerName)
+            } catch (e: Exception) {
+                // DB が使えないときは旧実装と同じく「参加済み」として扱う
+                NoticeConnectPlatform.bridge.logger.error("Failed to record the join of $playerName ($uuid)", e)
+                false
+            }
+            try {
+                announceJoin(uuid, playerName, serverName, hasPermissionHide, firstJoin)
+            } catch (e: Exception) {
+                NoticeConnectPlatform.bridge.logger.error("Failed to announce the join of $playerName", e)
+            }
+            McApiClient.assign(uuid, playerName)
+        }
+    }
+
+    private fun announceJoin(uuid: UUID, playerName: String, serverName: String, hasPermissionHide: Boolean, firstJoin: Boolean) {
         val replaceName = CustomConfig.config.replace[serverName] ?: serverName
 
-        lateinit var discordJoin: String
+        val discordJoin: String
         val color: Int
 
-        if (playerExists(uuid)) {
+        if (!firstJoin) {
             val loginMessage: String = CustomConfig.config.message.join.random()
 
             if (!StringUtils.isBlank(loginMessage) && !hasPermissionHide) {
@@ -35,7 +60,6 @@ object JoinLeaveHandler {
             if (!StringUtils.isBlank(loginMessage)) {
                 val replacedMessage = loginMessage.replace("<name>", playerName).replace("<currentServerName>", replaceName)
                 sendAudienceMessage(mm.deserialize(replacedMessage))
-                addPlayerLoginData(uuid)
             }
             color = Integer.valueOf(Integer.toHexString(Color.YELLOW.rgb).substring(2), 16)
             discordJoin = CustomConfig.config.discord.message.firstJoin.replace("%(PlayerName)", playerName)
@@ -43,7 +67,7 @@ object JoinLeaveHandler {
         if (discordJoin.isBlank()) {
             return
         }
-        val author = Author(discordJoin, null, "https://crafthead.net/avatar/$uuid")
+        val author = Author(discordJoin, null, McApiClient.avatarUrl(uuid, playerName))
         val embed = DiscordWebhookEmbed(color, author)
         DiscordWebhookData(arrayListOf(embed)).sendWebHook()
     }
@@ -62,38 +86,8 @@ object JoinLeaveHandler {
         if (discordLeftMessage.isBlank()) {
             return
         }
-        val author = Author(discordLeftMessage, null, "https://crafthead.net/avatar/$uuid")
+        val author = Author(discordLeftMessage, null, McApiClient.avatarUrl(uuid, playerName))
         val embed = DiscordWebhookEmbed(Integer.valueOf(Integer.toHexString(Color.RED.rgb).substring(2), 16), author)
         DiscordWebhookData(arrayListOf(embed)).sendWebHook()
-    }
-
-    fun playerExists(uuid: UUID): Boolean {
-        var playerExists = false
-        try {
-            val connection: Connection = Database.connection ?: return true
-            val statement = connection.prepareStatement("SELECT * FROM JoinedPlayerList WHERE uuid = ?")
-            statement.setString(1, uuid.toString())
-            val rs = statement.executeQuery()
-            if (rs.next()) {
-                playerExists = true
-            }
-            rs.close()
-            statement.close()
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
-        return playerExists
-    }
-
-    fun addPlayerLoginData(uuid: UUID) {
-        try {
-            val connection: Connection? = Database.connection
-            val statement = connection?.prepareStatement("INSERT INTO JoinedPlayerList (uuid) VALUES (?)")
-            statement?.setString(1, uuid.toString())
-            statement?.execute()
-            statement?.close()
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
     }
 }
