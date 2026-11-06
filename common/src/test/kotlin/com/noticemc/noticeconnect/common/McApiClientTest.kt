@@ -5,6 +5,7 @@ import com.noticemc.noticeconnect.common.mcapi.McApiRequest
 import java.util.*
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotEquals
 
 /**
  * mc-api v1 へのリクエスト組み立て (純粋関数) のテスト。
@@ -47,8 +48,17 @@ class McApiClientTest {
             McApiClient.batchRequest("https://example.com//", emptyList()).url,
         )
         assertEquals(
-            "https://example.com/v1/players/00068061-a5fc-4e10-abb3-43e23006cf40/avatar?size=64",
-            McApiClient.mcApiAvatarUrl("https://example.com/", uuid),
+            "https://example.com/v1/players/00068061-a5fc-4e10-abb3-43e23006cf40/avatar?size=64&random=abc",
+            McApiClient.mcApiAvatarUrl("https://example.com/", uuid, "abc"),
+        )
+    }
+
+    @Test
+    fun avatarUrlChangesEveryTime() {
+        // Discord の画像キャッシュは URL ごとなので、通知ごとに違う URL にする
+        assertNotEquals(
+            McApiClient.mcApiAvatarUrl("https://example.com", uuid),
+            McApiClient.mcApiAvatarUrl("https://example.com", uuid),
         )
     }
 }

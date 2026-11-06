@@ -52,6 +52,12 @@ object McApiClient {
     /** 一括同期の途中経過をコンソールに出す間隔 (バッチ数)。25 件 × 20 = 500 人ごと。 */
     private const val PROGRESS_LOG_EVERY_BATCHES = 20
 
+    /**
+     * 参加の通知が登録の完了を待つ時間の上限。mc-api は上流からの取得を 3 秒まで待って応答するので、
+     * それより少し長くする。mc-api が落ちていても通知が遅れすぎないように、[TIMEOUT] より短くする。
+     */
+    private const val REGISTER_WAIT_MILLIS = 5_000L
+
     /** 失敗の警告を一度だけ出すためのフラグ。成功したら戻す (次の障害でまた警告する)。 */
     private val failureWarned = AtomicBoolean(false)
 
@@ -91,8 +97,15 @@ object McApiClient {
         body = json.encodeToString(BatchRegisterRequest.serializer(), BatchRegisterRequest(uuids, false)),
     )
 
-    /** mc-api が返す 64px の顔画像の URL (`<url>/v1/players/<uuid>/avatar?size=64`)。 */
-    internal fun mcApiAvatarUrl(baseUrl: String, uuid: UUID): String = "${playersUrl(baseUrl)}/$uuid/avatar?size=64"
+    /**
+     * mc-api が返す 64px の顔画像の URL (`<url>/v1/players/<uuid>/avatar?size=64&random=<random>`)。
+     *
+     * Discord は画像を URL ごとにキャッシュするので、同じ URL だと新しいスキンがあっても古い画像 (既定スキンなど) が
+     * 表示され続ける。通知ごとに `random` を変えて、Discord に取り直させる。
+     * mc-api はエッジキャッシュのキーからクエリを除くので、`random` を変えても描き直しにはならない。
+     */
+    internal fun mcApiAvatarUrl(baseUrl: String, uuid: UUID, random: String = UUID.randomUUID().toString().replace("-", "")): String =
+        "${playersUrl(baseUrl)}/$uuid/avatar?size=64&random=$random"
 
     /** 設定が有効で、URL とトークンがそろっているときだけ設定を返す。 */
     private fun activeConfig(): McApi? {
@@ -105,14 +118,20 @@ object McApiClient {
 
     /**
      * 参加したプレイヤーを mc-api に登録し、成功したら LAST_SYNCED_AT を更新する。
+     *
+     * @return 登録が終わるか、[REGISTER_WAIT_MILLIS] を過ぎたら完了する Future (例外では完了しない)。
+     *   打ち切っても登録そのものは続く。無効なら完了済み
      */
-    fun assign(uuid: UUID, name: String) {
-        val config = activeConfig() ?: return
-        send(config, registerRequest(config.url, uuid, name)).thenAccept { ok ->
+    fun assign(uuid: UUID, name: String): CompletableFuture<Boolean> {
+        val config = activeConfig() ?: return CompletableFuture.completedFuture(false)
+        val registered = send(config, registerRequest(config.url, uuid, name))
+        registered.thenAccept { ok ->
             if (ok) {
                 DatabaseExecutor.execute { runCatching { Database.markSynced(listOf(uuid.toString())) } }
             }
         }
+        // copy に打ち切りを付ける。元の Future を打ち切ると、遅れて成功した登録を記録できなくなる
+        return registered.copy().completeOnTimeout(false, REGISTER_WAIT_MILLIS, TimeUnit.MILLISECONDS)
     }
 
     /**
