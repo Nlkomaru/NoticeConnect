@@ -52,8 +52,11 @@ object Utils {
      * Discord の Webhook に送る。非同期で、呼び出し元のスレッドは塞がない。
      * 送信は呼び出し順に 1 件ずつ行う (前の送信が終わってから次を始める)。
      * 各リクエストには 10 秒のタイムアウトがあるので、1 件が詰まっても後続が止まり続けることはない。
+     *
+     * @param after これが終わってから送る (成否は問わない)。順序を保つため、後続の送信もこれを待つ。
+     *   必ず完了する Future を渡すこと
      */
-    fun DiscordWebhookData.sendWebHook() {
+    fun DiscordWebhookData.sendWebHook(after: CompletableFuture<*> = CompletableFuture.completedFuture(null)) {
         val url = CustomConfig.config.discord.url
         if (url.isBlank()) {
             return
@@ -76,6 +79,7 @@ object Utils {
             // 前の送信の成否は問わない (失敗はその送信のログに出している)。終わったら次を送る
             webhookTail = webhookTail
                 .handle { _, _ -> null }
+                .thenCompose { after.handle { _, _ -> null } }
                 .thenCompose { httpClient.sendAsync(request, HttpResponse.BodyHandlers.discarding()) }
                 .whenComplete { response, error ->
                     val logger = NoticeConnectPlatform.bridge.logger

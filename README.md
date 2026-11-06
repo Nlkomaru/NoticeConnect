@@ -81,7 +81,7 @@ discord {
     }
     url = "https://discord.com/api/webhooks/*********/**************"
     ## Icon URL of the embed. %(UUID) and %(PlayerName) are replaced.
-    ## When empty: <mcApi.url>/v1/players/<uuid>/avatar?size=64 if mcApi is enabled, otherwise https://crafthead.net/avatar/<uuid>
+    ## When empty: <mcApi.url>/v1/players/<uuid>/avatar?size=64&random=<random> if mcApi is enabled, otherwise https://crafthead.net/avatar/<uuid>
     avatarUrl = ""
 }
 ## mc-api integration. On every join, PUT <url>/v1/players/<uuid> with {"name"}
@@ -137,7 +137,10 @@ When `mcApi.enabled` is `true`, NoticeConnect registers players to mc-api.
   The config is re-read before every batch: the sync stops when `mcApi` is disabled, and the current `url` / `token` are used.
 - Both requests send `Authorization: Bearer <mcApi.token>`.
 - When `discord.avatarUrl` is empty and mc-api is enabled, the Discord embed icon is
-  `<mcApi.url>/v1/players/<uuid>/avatar?size=64`.
+  `<mcApi.url>/v1/players/<uuid>/avatar?size=64&random=<random>`. `random` changes on every notification
+  so that Discord's image cache does not keep showing an outdated skin.
+- The Discord join notification is sent after the `PUT` finishes (waiting at most 5 seconds),
+  so that the icon is rendered from the refreshed profile. The in-game message is not delayed.
 
 ## Database
 

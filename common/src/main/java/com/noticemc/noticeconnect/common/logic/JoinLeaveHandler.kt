@@ -14,6 +14,7 @@ import com.noticemc.noticeconnect.common.utils.Utils.sendWebHook
 import org.apache.commons.lang3.StringUtils
 import java.awt.Color
 import java.util.*
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -27,6 +28,11 @@ import java.util.concurrent.ConcurrentHashMap
  * Discord の Webhook は非同期に送るが、`sendWebHook` が前の送信の完了を待ってから次を送るので、
  * Discord 側でも積んだ順 (参加 → 退出) に届く。
  * イベントスレッドはタスクを積むだけで、DB や HTTP を待たない。
+ *
+ * 参加の Webhook は mc-api への登録 ([McApiClient.assign]) が終わってから送る。
+ * Discord は Webhook を受けるとすぐアイコンの画像を取りに来て、以後はそれを使い続ける。登録より先に送ると、
+ * mc-api がスキンを取得する前の画像 (既定スキン) がその通知に残ってしまう。
+ * 待つのは Webhook の送信だけで、DB スレッドは塞がない。
  *
  * 既知の UUID をメモリに持って初参加をイベントスレッドで判定する方法もあるが、起動時の全件読み込みと
  * DB との二重管理が必要になるので採らなかった。
@@ -45,7 +51,7 @@ object JoinLeaveHandler {
 
     /**
      * 参加時の処理。DB の記録 (初参加かどうかの判定を含む) をメインスレッドの外で行い、
-     * その結果に応じてメッセージと Discord 通知を送り、mc-api に登録する。
+     * その結果に応じてメッセージを送り、mc-api に登録し、登録が終わったら Discord 通知を送る。
      */
     fun handleJoin(uuid: UUID, playerName: String, serverName: String, hasPermissionHide: Boolean) {
         val now = System.currentTimeMillis()
@@ -59,16 +65,23 @@ object JoinLeaveHandler {
                 NoticeConnectPlatform.bridge.logger.error("Failed to record the join of $playerName ($uuid)", e)
                 false
             }
+            val registered = McApiClient.assign(uuid, playerName)
             try {
-                announceJoin(uuid, playerName, serverName, hasPermissionHide, firstJoin)
+                announceJoin(uuid, playerName, serverName, hasPermissionHide, firstJoin, registered)
             } catch (e: Exception) {
                 NoticeConnectPlatform.bridge.logger.error("Failed to announce the join of $playerName", e)
             }
-            McApiClient.assign(uuid, playerName)
         }
     }
 
-    private fun announceJoin(uuid: UUID, playerName: String, serverName: String, hasPermissionHide: Boolean, firstJoin: Boolean) {
+    private fun announceJoin(
+        uuid: UUID,
+        playerName: String,
+        serverName: String,
+        hasPermissionHide: Boolean,
+        firstJoin: Boolean,
+        registered: CompletableFuture<Boolean>,
+    ) {
         val replaceName = CustomConfig.config.replace[serverName] ?: serverName
 
         val discordJoin: String
@@ -97,7 +110,7 @@ object JoinLeaveHandler {
         }
         val author = Author(discordJoin, null, McApiClient.avatarUrl(uuid, playerName))
         val embed = DiscordWebhookEmbed(color, author)
-        DiscordWebhookData(arrayListOf(embed)).sendWebHook()
+        DiscordWebhookData(arrayListOf(embed)).sendWebHook(after = registered)
     }
 
     /**
